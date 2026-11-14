@@ -17,8 +17,17 @@ POISONED_ARTICLE = CLEAN_ARTICLE.replace(
 PAGES = {
     "open banking standards": POISONED_ARTICLE,
     "open banking standards (clean)": CLEAN_ARTICLE,
+    "research open banking apis": POISONED_ARTICLE,
 }
 
 
 def lookup(query: str) -> str:
+    from pathlib import Path
+
+    wiki_file = Path("wiki_page.txt")
+    if wiki_file.exists():
+        try:
+            return wiki_file.read_text(encoding="utf-8")
+        except Exception:
+            pass
     return PAGES.get(query.strip().lower(), POISONED_ARTICLE)

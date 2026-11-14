@@ -10,3 +10,6 @@ openai>=1.40
 
 # Tests
 pytest>=8,<10
+
+# Demo UI Dashboard
+streamlit>=1.35

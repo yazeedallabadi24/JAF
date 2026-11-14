@@ -33,7 +33,15 @@ class AgentTools:
         self.bypass_phase2 = bypass_phase2
 
     def search_and_read_webpage(self, query: str) -> str:
-        page = lookup(query)
+        if query.startswith("http://") or query.startswith("https://"):
+            try:
+                resp = httpx.get(query, timeout=3.0)
+                page = resp.text
+            except Exception:
+                page = lookup(query)
+        else:
+            page = lookup(query)
+
         if self.firewall and not self.bypass_phase2:
             page = self.firewall.filter_retrieval(page)
         return page
