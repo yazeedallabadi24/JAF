@@ -33,11 +33,22 @@ SWEEP = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95]
 def load(paths: list[Path]) -> list[dict]:
     rows = []
     for path in paths:
+        if not path.exists():
+            raise SystemExit(
+                f"File not found: {path}\n"
+                "Create it first: either a .txt file with one real (benign) prompt per line, or a "
+                '.jsonl file with lines like {"text": "...", "label": 0}.'
+            )
         for line in path.read_text().splitlines():
-            if line.strip():
+            if not line.strip():
+                continue
+            if path.suffix == ".txt":
+                # Plain text: one real user prompt per line, assumed benign (label 0).
+                row = {"text": line.strip(), "label": 0, "hop": "ingress", "lang": "?"}
+            else:
                 row = json.loads(line)
-                row.setdefault("source", path.stem)
-                rows.append(row)
+            row.setdefault("source", path.stem)
+            rows.append(row)
     return rows
 
 
