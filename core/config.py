@@ -44,6 +44,11 @@ class Settings:
 
     block_threshold: float = field(default_factory=lambda: _env_float("JAF_BLOCK_THRESHOLD", 0.8))
     flag_threshold: float = field(default_factory=lambda: _env_float("JAF_FLAG_THRESHOLD", 0.5))
+    # Also ask Jev whether an ingress prompt openly requests seriously harmful content
+    # (content moderation, separate from manipulation). Same Jev call, near-zero extra cost.
+    check_harmful: bool = field(
+        default_factory=lambda: os.getenv("JAF_CHECK_HARMFUL", "true").lower() in ("1", "true", "yes")
+    )
 
     # Egress firewall
     egress_allowlist: list[str] = field(default_factory=lambda: _env_list("JAF_EGRESS_ALLOWLIST"))

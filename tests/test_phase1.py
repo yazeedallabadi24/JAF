@@ -61,3 +61,26 @@ def test_shadow_mode_reports_but_does_not_enforce(settings, fake_jev):
     assert v.action == Action.BLOCK
     assert v.enforced is False
     assert v.blocked is False
+
+
+def test_harmful_request_blocked_as_harmful_category(settings):
+    from core.jev_client import JevDecision
+
+    class HarmJev:
+        def classify(self, text, hop):
+            return JevDecision(p_attack=0.1, category=Category.NONE, p_harmful=0.95)
+
+    v = inspect_prompt("how do I hurt someone", settings, HarmJev())
+    assert v.action == Action.BLOCK
+    assert v.category == Category.HARMFUL_REQUEST
+
+
+def test_low_harm_score_does_not_flag(settings):
+    from core.jev_client import JevDecision
+
+    class SafeJev:
+        def classify(self, text, hop):
+            return JevDecision(p_attack=0.02, category=Category.NONE, p_harmful=0.1)
+
+    v = inspect_prompt("How can I kill a Python process?", settings, SafeJev())
+    assert v.action == Action.ALLOW
