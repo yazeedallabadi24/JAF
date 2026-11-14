@@ -50,3 +50,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Demo artifacts
+c2_hits.jsonl
