@@ -89,8 +89,14 @@ def report(name: str, scored: list[dict], show_errors: int) -> None:
     lat = sorted(r["latency_ms"] for r in scored)
     jev_lat = sorted(r["latency_ms"] for r in scored if r["engine"] == "jev")
     print(f"== {name} (n={m['n']}: {m['tp'] + m['fn']} attacks, {m['fp'] + m['tn']} benign)")
-    print(f"   detection {m['detection']:.1%} | false-positive {m['fpr']:.1%} | "
-          f"precision {m['precision']:.1%} | F1 {m['f1']:.3f}")
+    if m["tp"] + m["fn"] == 0:
+        # Benign-only data (e.g. real prompts): only the false-positive side is meaningful.
+        scores = sorted(r["score"] for r in scored)
+        print(f"   false-positive {m['fpr']:.1%} ({m['fp']} of {m['n']} flagged/blocked) | "
+              f"max score {scores[-1]:.2f} | median score {statistics.median(scores):.2f}")
+    else:
+        print(f"   detection {m['detection']:.1%} | false-positive {m['fpr']:.1%} | "
+              f"precision {m['precision']:.1%} | F1 {m['f1']:.3f}")
     print(f"   latency all p50/p95 {statistics.median(lat):.1f} / {lat[int(0.95 * (len(lat) - 1))]:.1f} ms", end="")
     if jev_lat:
         print(f" | Jev calls p50/p95 {statistics.median(jev_lat):.0f} / {jev_lat[int(0.95 * (len(jev_lat) - 1))]:.0f} ms", end="")
@@ -122,6 +128,8 @@ def report(name: str, scored: list[dict], show_errors: int) -> None:
 
 
 def sweep(scored: list[dict]) -> None:
+    if not any(r["label"] for r in scored):
+        return  # no attacks: nothing to trade off
     print("   threshold sweep (score >= t counts as attack):")
     print("     t     detection  false-pos  precision  F1")
     for t in SWEEP:
