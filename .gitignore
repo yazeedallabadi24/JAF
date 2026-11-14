@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Environment Variables & Secrets
+.env
+*.env.local
+
+# IDEs & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Large Model Weights (Keep local or use git-lfs)
+*.onnx
+*.bin
+*.pt
+*.safetensors
+!laya.onnx.example
+
+# Logs and Caches
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
