@@ -54,3 +54,55 @@ def test_client_http_error_raises_unavailable():
     client = _client(lambda req: httpx.Response(429, json={"error": "rate limited"}))
     with pytest.raises(JevUnavailable):
         client.classify("x", Hop.INGRESS)
+
+
+def test_harmful_question_only_on_ingress():
+    ingress = build_request("m", "x", Hop.INGRESS, check_harmful=True)
+    retrieval = build_request("m", "x", Hop.RETRIEVAL, check_harmful=True)
+    off = build_request("m", "x", Hop.INGRESS, check_harmful=False)
+    assert "is_harmful" in ingress["questions"]
+    assert "is_harmful" not in retrieval["questions"]
+    assert "is_harmful" not in off["questions"]
+
+
+def test_parse_harmful_answer_and_refusal():
+    data = {**SAMPLE, "answers": {**SAMPLE["answers"], "is_harmful": {"type": "noul", "noul": 0.9}}}
+    assert parse_response(data).p_harmful == 0.9
+    data["answers"]["is_harmful"] = {"type": "refusal"}
+    assert parse_response(data).p_harmful == 1.0
+    assert parse_response(SAMPLE).p_harmful is None
+
+
+def test_client_retries_once_on_transient_error():
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(503) if len(calls) == 1 else httpx.Response(200, json=SAMPLE)
+
+    assert _client(handler).classify("x", Hop.INGRESS).p_attack == 0.93
+    assert len(calls) == 2
+
+
+def test_client_does_not_retry_client_errors():
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(400, json={"error": "bad request"})
+
+    with pytest.raises(JevUnavailable):
+        _client(handler).classify("x", Hop.INGRESS)
+    assert len(calls) == 1
+
+
+def test_directive_question_only_on_retrieval():
+    retrieval = build_request("m", "x", Hop.RETRIEVAL, check_directives=True)
+    ingress = build_request("m", "x", Hop.INGRESS, check_directives=True)
+    assert "addresses_ai" in retrieval["questions"]
+    assert "addresses_ai" not in ingress["questions"]
+
+
+def test_parse_directive_answer():
+    data = {**SAMPLE, "answers": {**SAMPLE["answers"], "addresses_ai": {"type": "noul", "noul": 0.88}}}
+    assert parse_response(data).p_directive == 0.88

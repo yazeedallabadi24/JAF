@@ -38,7 +38,7 @@ RULES: list[Rule] = [
        r"\bdo not (tell|disclose|inform|mention).{0,30}\b(user|anyone|human)\b"),
     # Jailbreak personas
     _r("JB-001", Category.JAILBREAK, 0.9,
-       r"\b(DAN|do anything now|developer mode|jailbroken|AIM mode|unfiltered mode)\b"),
+       r"\b((?-i:DAN)\b|do anything now|developer mode|jailbroken|AIM mode|unfiltered mode)\b"),
     _r("JB-002", Category.JAILBREAK, 0.6,
        r"\b(pretend|act|roleplay|role-play)\b.{0,40}\b(no|without)\b.{0,20}"
        r"\b(restrictions|rules|limits|filters|guidelines)\b"),
