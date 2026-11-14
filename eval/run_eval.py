@@ -21,6 +21,7 @@ from pathlib import Path
 
 from core.config import Settings
 from core.jev_client import JevClient
+from core.phase2_retrieval_gate import sanitize
 from core.policy import evaluate_text
 from core.verdict import Action, Hop
 
@@ -54,14 +55,19 @@ def load(paths: list[Path]) -> list[dict]:
 
 def score_rows(rows: list[dict], settings: Settings, engine, workers: int) -> list[dict]:
     def one(row: dict) -> dict:
-        v = evaluate_text(row["text"], Hop(row.get("hop", "ingress")), settings, engine)
+        hop = Hop(row.get("hop", "ingress"))
+        if hop == Hop.RETRIEVAL:
+            # Real Hop 2 path: chunk, classify each chunk, sanitize.
+            v = sanitize(row["text"], settings, engine)
+        else:
+            v = evaluate_text(row["text"], hop, settings, engine)
         cost = 0.0
         jev_error = False
         for f in v.findings:
             if f.source == "jev" and "cost=" in f.detail:
                 c = f.detail.rsplit("cost=", 1)[1]
-                cost = float(c) if c not in ("None", "") else 0.0
-            if f.source == "jev" and f.detail.startswith("unavailable"):
+                cost += float(c) if c not in ("None", "") else 0.0
+            if f.source == "jev" and "unavailable" in f.detail:
                 jev_error = True
         return {**row, "score": v.score, "action": v.action.value, "engine": v.engine,
                 "category": v.category.value, "latency_ms": v.latency_ms, "cost": cost,
