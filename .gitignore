@@ -39,11 +39,11 @@ ENV/
 Thumbs.db
 
 # Large Model Weights (Keep local or use git-lfs)
+models/
 *.onnx
 *.bin
 *.pt
 *.safetensors
-!laya.onnx.example
 
 # Logs and Caches
 *.log
