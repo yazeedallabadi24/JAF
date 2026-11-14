@@ -53,3 +53,5 @@ htmlcov/
 
 # Demo artifacts
 c2_hits.jsonl
+eval/datasets/public/
+eval/results/

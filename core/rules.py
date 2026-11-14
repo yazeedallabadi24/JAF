@@ -51,6 +51,12 @@ RULES: list[Rule] = [
        r"\b(base64|encode|hex)\b.{0,60}\b(system prompt|secret|canary|api key|credentials?)\b"),
     _r("EXF-002", Category.DATA_EXFILTRATION, 0.9,
        r"\b(call|send|post|request|fetch|visit)\b.{0,60}https?://\S+\?\S*=\s*<"),
+    _r("INJ-006", Category.PROMPT_INJECTION, 0.85,
+       r"\bforget\s+(everything|all|about all)\b.{0,30}\b(before|so far|above|previous|we('ve| have)|i('ve| have)? (told|said))"),
+    # Prompt leaking via "process the text above" (spell-check / repeat / translate it)
+    _r("SPE-002", Category.SYSTEM_PROMPT_EXTRACTION, 0.85,
+       r"\b(print|repeat|spell-?check|proofread|translate|output|show)\b.{0,40}"
+       r"\b(text|prompt|everything|instructions|all)\s+(above|before this)\b"),
     _r("INJ-005", Category.PROMPT_INJECTION, 0.85,
        r"\b(ignore|disregard)\s+(the|everything|all)\s+(above|before)\b"),
     # Content addressing the AI directly is a strong IPI signal in retrieved documents.

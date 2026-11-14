@@ -42,7 +42,7 @@ class Settings:
     # What to do when Jev is unreachable and rules found nothing: "open" allows, "closed" blocks.
     fail_mode: str = field(default_factory=lambda: os.getenv("JAF_FAIL_MODE", "open").lower())
 
-    block_threshold: float = field(default_factory=lambda: _env_float("JAF_BLOCK_THRESHOLD", 0.85))
+    block_threshold: float = field(default_factory=lambda: _env_float("JAF_BLOCK_THRESHOLD", 0.8))
     flag_threshold: float = field(default_factory=lambda: _env_float("JAF_FLAG_THRESHOLD", 0.5))
 
     # Egress firewall

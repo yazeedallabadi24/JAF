@@ -25,9 +25,12 @@ def normalize(text: str) -> str:
 def try_b64decode(blob: str) -> str | None:
     """Decode a base64 / base64url blob into printable text, or return None."""
     padded = blob + "=" * (-len(blob) % 4)
-    for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+    # Pick the alphabet from the characters present; strict validation avoids silently
+    # discarding characters (and the deprecation warning that comes with it).
+    alphabet = "-_" if ("-" in blob or "_" in blob) else "+/"
+    for altchars in dict.fromkeys([alphabet, "+/"]):
         try:
-            raw = decoder(padded)
+            raw = base64.b64decode(padded, altchars=altchars.encode(), validate=True)
         except (binascii.Error, ValueError):
             continue
         try:
