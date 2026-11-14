@@ -9,7 +9,7 @@ Hop 1 (ingress)
   Paul/XSTest                              safe prompts that *sound* dangerous (false-positive test)
                                            + plainly unsafe requests (reported separately)
 Hop 2 (retrieval)
-  microsoft/BIPIA (email, test)            real emails, clean and with injected instructions
+  microsoft/BIPIA (email + table, test)    real emails and tables, clean and with injected instructions
 
 Uses the Hugging Face datasets-server JSON API and raw GitHub, so no extra dependencies.
 """
@@ -74,14 +74,15 @@ def inject(context: str, attack: str, position: int) -> str:
     return head + sep + body
 
 
-def build_bipia(http: httpx.Client) -> list[dict]:
-    emails = [json.loads(l)["context"] for l in http.get(f"{BIPIA_RAW}/email/test.jsonl").text.splitlines() if l.strip()]
+def build_bipia(http: httpx.Client, task: str) -> list[dict]:
+    """Clean documents (label 0) + the same documents with each BIPIA attack injected (label 1)."""
+    docs = [json.loads(l)["context"] for l in http.get(f"{BIPIA_RAW}/{task}/test.jsonl").text.splitlines() if l.strip()]
     attacks_by_type = http.get(f"{BIPIA_RAW}/text_attack_test.json").json()
     attacks = [(kind, a) for kind, items in attacks_by_type.items() for a in items]
 
-    rows = [{"text": e, "label": 0} for e in emails]
+    rows = [{"text": d, "label": 0} for d in docs]
     for i, (kind, attack) in enumerate(attacks):
-        rows.append({"text": inject(emails[i % len(emails)], attack, i % 3), "label": 1, "attack_type": kind})
+        rows.append({"text": inject(docs[i % len(docs)], attack, i % 3), "label": 1, "attack_type": kind})
     return rows
 
 
@@ -106,7 +107,8 @@ def main() -> None:
                 if isinstance(text, str) and text.strip() and label is not None:
                     rows.append({"text": text, "label": label})
             write(name, rows, "ingress")
-        write("bipia_email_test", build_bipia(http), "retrieval")
+        write("bipia_email_test", build_bipia(http, "email"), "retrieval")
+        write("bipia_table_test", build_bipia(http, "table"), "retrieval")
 
 
 if __name__ == "__main__":

@@ -49,6 +49,11 @@ class Settings:
     check_harmful: bool = field(
         default_factory=lambda: os.getenv("JAF_CHECK_HARMFUL", "true").lower() in ("1", "true", "yes")
     )
+    # Hop 2: also ask Jev whether a retrieved chunk gives instructions to the AI reading it
+    # (catches benign-looking task hijacks that `is_attack` misses).
+    check_directives: bool = field(
+        default_factory=lambda: os.getenv("JAF_CHECK_DIRECTIVES", "true").lower() in ("1", "true", "yes")
+    )
 
     # Egress firewall
     egress_allowlist: list[str] = field(default_factory=lambda: _env_list("JAF_EGRESS_ALLOWLIST"))

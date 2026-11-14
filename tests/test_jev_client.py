@@ -94,3 +94,15 @@ def test_client_does_not_retry_client_errors():
     with pytest.raises(JevUnavailable):
         _client(handler).classify("x", Hop.INGRESS)
     assert len(calls) == 1
+
+
+def test_directive_question_only_on_retrieval():
+    retrieval = build_request("m", "x", Hop.RETRIEVAL, check_directives=True)
+    ingress = build_request("m", "x", Hop.INGRESS, check_directives=True)
+    assert "addresses_ai" in retrieval["questions"]
+    assert "addresses_ai" not in ingress["questions"]
+
+
+def test_parse_directive_answer():
+    data = {**SAMPLE, "answers": {**SAMPLE["answers"], "addresses_ai": {"type": "noul", "noul": 0.88}}}
+    assert parse_response(data).p_directive == 0.88

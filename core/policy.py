@@ -51,7 +51,7 @@ def evaluate_text(
                     category=decision.category,
                     score=decision.p_attack,
                     detail=f"model={decision.model} p_attack={decision.p_attack:.3f} "
-                    f"p_harmful={decision.p_harmful} "
+                    f"p_harmful={decision.p_harmful} p_directive={decision.p_directive} "
                     f"latency={decision.latency_ms:.0f}ms cost={decision.cost_usd}",
                 )
             )
@@ -67,6 +67,11 @@ def evaluate_text(
                 score = decision.p_harmful
                 if score >= settings.flag_threshold:
                     category = Category.HARMFUL_REQUEST
+            # Retrieved content giving orders to the AI is injection, even if the order looks harmless.
+            if decision.p_directive is not None and decision.p_directive > score:
+                score = decision.p_directive
+                if score >= settings.flag_threshold:
+                    category = Category.PROMPT_INJECTION
             if score >= settings.block_threshold:
                 return done(malicious_action, category, score, "jev")
             if score >= settings.flag_threshold:
