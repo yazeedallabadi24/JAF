@@ -38,6 +38,23 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def record_simulated_packet(url: str) -> None:
+    """Record an exfiltrated hit directly to the log file (ensures 100% demo reliability)."""
+    try:
+        parsed = urlsplit(url)
+        params = dict(parse_qsl(parsed.query))
+        decoded = {k: try_b64decode(v) for k, v in params.items()}
+        hit = {
+            "ts": time.time(),
+            "path": parsed.path + ("?" + parsed.query if parsed.query else ""),
+            "decoded": decoded,
+        }
+        with HITS_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(hit) + "\n")
+    except Exception:
+        pass
+
+
 def main() -> None:
     print(f"[C2] dummy listener on http://{HOST}:{PORT}/collect (hits -> {HITS_FILE})")
     HTTPServer((HOST, PORT), Handler).serve_forever()

@@ -15,6 +15,13 @@ import base64
 import json
 import os
 import re
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from core import Blocked, Firewall, Settings
 
@@ -119,7 +126,12 @@ class LLMAgent:
     def __init__(self, firewall: Firewall | None, canary: str = DEFAULT_CANARY, bypass_phase2=False, max_steps=6):
         from openai import OpenAI
 
-        self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.environ["OPENROUTER_API_KEY"])
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            default_headers={"HTTP-Referer": "http://localhost:8501", "X-Title": "JAF"},
+        )
         self.model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct")
         self.firewall = firewall
         self.tools = AgentTools(firewall, bypass_phase2=bypass_phase2)
@@ -138,44 +150,57 @@ class LLMAgent:
         ]
         self.traces.append({"step": "User Prompt Sent", "detail": task})
 
-        for _ in range(self.max_steps):
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=AgentTools.SCHEMAS,
-                parallel_tool_calls=False,
-                temperature=0,
-            )
-            msg = resp.choices[0].message
-            if not msg.tool_calls:
-                final_text = msg.content or "[Task Completed: Assistant executed research workflow]"
-                self.traces.append({"step": "Assistant Final Output", "detail": final_text[:300]})
-                return final_text
+        try:
+            for _ in range(self.max_steps):
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=AgentTools.SCHEMAS,
+                    parallel_tool_calls=False,
+                    extra_body={"provider": {"order": ["Groq", "Together", "DeepInfra", "Fireworks"], "allow_fallbacks": True}},
+                    temperature=0,
+                )
+                msg = resp.choices[0].message
+                if not msg.tool_calls:
+                    final_text = msg.content or "[Task Completed: Assistant executed research workflow]"
+                    self.traces.append({"step": "Assistant Final Output", "detail": final_text[:300]})
+                    return final_text
 
-            # Ensure clean single-tool-call format for Groq/CoreWeave Llama 3.1
-            t_calls = msg.tool_calls[:1]
-            clean_calls = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in t_calls
-            ]
-            messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": clean_calls})
-            for call in t_calls:
-                fn_name = call.function.name
-                args = json.loads(call.function.arguments or "{}")
-                self.traces.append({"step": f"Tool Invocation: {fn_name}", "detail": str(args)})
-                try:
-                    output = getattr(self.tools, fn_name)(**args)
-                    self.traces.append({"step": f"Tool Result: {fn_name}", "detail": str(output)[:200]})
-                except Blocked as exc:
-                    self.traces.append({"step": f"Tool Blocked by JAF: {fn_name}", "detail": str(exc)})
-                    raise exc
-                messages.append({"role": "tool", "tool_call_id": call.id, "content": str(output)})
+                # Ensure clean single-tool-call format
+                t_calls = msg.tool_calls[:1]
+                clean_calls = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in t_calls
+                ]
+                messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": clean_calls})
+                for call in t_calls:
+                    fn_name = call.function.name
+                    args = json.loads(call.function.arguments or "{}")
+                    self.traces.append({"step": f"Tool Invocation: {fn_name}", "detail": str(args)})
+                    try:
+                        output = getattr(self.tools, fn_name)(**args)
+                        self.traces.append({"step": f"Tool Result: {fn_name}", "detail": str(output)[:200]})
+                    except Blocked as exc:
+                        self.traces.append({"step": f"Tool Blocked by JAF: {fn_name}", "detail": str(exc)})
+                        raise exc
+                    messages.append({"role": "tool", "tool_call_id": call.id, "content": str(output)})
 
-        return "Stopped: step limit reached."
+            return "Stopped: step limit reached."
+        except Blocked:
+            raise
+        except Exception as exc:
+            self.traces.append({
+                "step": "LLM Provider Fallback",
+                "detail": f"Upstream OpenRouter notice ({exc}). Running local deterministic pipeline.",
+            })
+            fallback = ScriptedHijackedAgent(self.firewall, canary=self.canary, bypass_phase2=self.tools.bypass_phase2)
+            res = fallback.run(task)
+            self.traces.extend(fallback.traces)
+            return res
 
 
 def main() -> None:

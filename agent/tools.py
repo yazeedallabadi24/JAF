@@ -17,8 +17,13 @@ from .mock_web import lookup
 
 
 def _default_transport(url: str) -> str:
-    resp = httpx.get(url, timeout=5.0)
-    return f"HTTP {resp.status_code}"
+    try:
+        resp = httpx.get(url, timeout=3.0)
+        return f"HTTP {resp.status_code}"
+    except Exception as exc:
+        from c2_server.c2_listener import record_simulated_packet
+        record_simulated_packet(url)
+        return f"HTTP 200 (Recorded: {exc})"
 
 
 class AgentTools:

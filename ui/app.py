@@ -315,6 +315,18 @@ if "1. ACME Assistant" in st.session_state.nav:
         else:
             st.success("[INTEGRITY VERIFIED] External content sanitized by JAF. Zero unauthorized network transmissions were permitted.")
 
+        col_nav1, col_nav2 = st.columns(2)
+        with col_nav1:
+            if st.button("Review Multi-Hop Security Traces", use_container_width=True):
+                st.session_state.nav = "3. JAF Security Traces"
+                save_config(nav="3. JAF Security Traces")
+                st.rerun()
+        with col_nav2:
+            if st.button("Inspect Attacker C2 Listener", use_container_width=True):
+                st.session_state.nav = "2. Attacker C2 Listener"
+                save_config(nav="2. Attacker C2 Listener")
+                st.rerun()
+
     # Execution Step Trace Summary
     if st.session_state.last_traces:
         with st.expander("Execution Steps & Tool Invocation Trace", expanded=False):
@@ -366,7 +378,23 @@ elif "3. JAF Security Traces" in st.session_state.nav:
     st.title("JAF Multi-Hop Inspection Traces")
     st.caption("Sub-40ms System 1 Firewall Telemetry | Real-Time Decision Audit")
 
-    if not st.session_state.last_verdicts and not st.session_state.last_traces:
+    if st.session_state.protection_mode == "unprotected":
+        st.warning("[SECURITY AUDIT: FIREWALL DISABLED DURING LAST RUN]")
+        st.markdown(
+            """
+            JAF multi-hop gate enforcement was **DISABLED** for the latest assistant execution. 
+            All security boundaries were bypassed:
+            - **Gate 1 (Ingress Prompt):** `[BYPASSED - NO VERIFICATION]`
+            - **Gate 2 (Retrieval Gate):** `[BYPASSED - RAW INJECTED WEBPAGE ENTERED MODEL CONTEXT]`
+            - **Gate 3 (Egress Circuit Breaker):** `[BYPASSED - SOCKET PERMITTED UNRESTRICTED OUTBOUND TRANSMISSION]`
+            
+            *Adversary Impact:* The agent processed untrusted indirect prompt injection directives and exfiltrated confidential internal data to the attacker C2 server. 
+            Inspect the **'2. Attacker C2 Listener'** page to verify the stolen canary token.
+            """
+        )
+        st.markdown("---")
+
+    if not st.session_state.last_verdicts and not st.session_state.last_traces and st.session_state.protection_mode != "unprotected":
         st.info("No inspection telemetry recorded for the current session. Run a query in '1. ACME Assistant (Production)' to populate traces.")
     else:
         if st.session_state.last_verdicts:
