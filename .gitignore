@@ -50,3 +50,11 @@ models/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Demo artifacts
+c2_hits.jsonl
+eval/datasets/public/
+eval/results/
+
+# Real prompts for local eval (may contain private data)
+my_prompts.*

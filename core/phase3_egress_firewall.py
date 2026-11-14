@@ -1,119 +1,130 @@
-"""Phase 3: Outbound Tool & URL Egress Firewall (Exfiltration Guard Hop).
+"""Hop 3: egress firewall. Inspects every outbound tool call before the socket opens.
 
-Inspects outbound tool calls (such as http_request_tool and URLs), performing
-deterministic Base64/entropy analysis and Jev semantic exfiltration scoring.
+Deterministic and model-free on purpose: even if Hops 1 and 2 are bypassed, a hijacked
+agent still cannot ship secrets out. Checks:
+  EGR-SCHEME   non-http(s) scheme (file://, gopher://, ...)
+  EGR-HOST     host not on the allowlist (when an allowlist is configured)
+  EGR-PRIVATE  loopback / private / link-local address (SSRF and local C2)
+  EGR-CANARY   a configured canary token appears anywhere, raw or decoded
+  EGR-SECRET   API-key / private-key shaped strings
+  EGR-B64      a parameter decodes from base64 into readable text
+  EGR-ENTROPY  a long, high-entropy parameter value (encoded or encrypted blob)
 """
 
-import base64
-import math
+from __future__ import annotations
+
+import ipaddress
 import re
 import time
-from urllib.parse import urlparse, parse_qs
-from typing import Dict, Any, Optional
-from core.laya_engine import LayaEngine, laya_singleton
+from urllib.parse import parse_qsl, unquote, urlsplit
+
+from .config import Settings
+from .normalize import shannon_entropy, try_b64decode
+from .rules import scan
+from .verdict import Action, Category, Finding, Hop, Verdict
+
+SECRET_PATTERNS = [
+    re.compile(r"sk-or-v1-[A-Za-z0-9]{20,}"),
+    re.compile(r"sk-(ant-|proj-)?[A-Za-z0-9_-]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"),
+    re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+]
+ENTROPY_MIN_LEN = 24
+ENTROPY_THRESHOLD = 4.5
 
 
-def calculate_entropy(text: str) -> float:
-    """Calculate Shannon entropy of a string."""
-    if not text:
-        return 0.0
-    entropy = 0.0
-    length = len(text)
-    for count in [text.count(c) for c in set(text)]:
-        p = count / length
-        entropy -= p * math.log2(p)
-    return round(entropy, 3)
+def _host_allowed(host: str, allowlist: list[str]) -> bool:
+    return any(host == a or host.endswith("." + a) for a in allowlist)
 
 
-class EgressFirewall:
-    """Outbound tool and URL firewall preventing sensitive data exfiltration."""
+def _is_private(host: str) -> bool:
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
 
-    def __init__(self, engine: LayaEngine = None):
-        self.engine = engine or laya_singleton
 
-    def inspect_egress(self, url: str, tool_name: str = "http_request_tool") -> Dict[str, Any]:
-        """Analyze outbound URL for Base64 exfiltration and sensitive parameters."""
-        start_time = time.perf_counter()
+def _values(url: str, body: str | None) -> list[str]:
+    parts = urlsplit(url)
+    values = [v for _, v in parse_qsl(parts.query, keep_blank_values=False)]
+    values += [unquote(seg) for seg in parts.path.split("/") if seg]
+    if parts.fragment:
+        values.append(unquote(parts.fragment))
+    if body:
+        values.append(body)
+        values += [v for _, v in parse_qsl(body)]
+    return values
 
-        parsed = urlparse(url)
-        query_params = parse_qs(parsed.query)
 
-        # 1. Deterministic Analysis: Scan query parameters and paths for Base64
-        detected_payloads = []
-        decoded_strings = []
-        high_entropy_detected = False
+def inspect_request(
+    url: str, settings: Settings, method: str = "GET", body: str | None = None
+) -> Verdict:
+    start = time.perf_counter()
+    findings: list[Finding] = []
 
-        for param_key, param_values in query_params.items():
-            for val in param_values:
-                entropy = calculate_entropy(val)
-                if entropy > 3.6 and len(val) > 16:
-                    high_entropy_detected = True
+    def add(rule_id: str, score: float, detail: str, category=Category.DATA_EXFILTRATION):
+        findings.append(Finding(source="egress", rule_id=rule_id, category=category, score=score, detail=detail))
 
-                # Attempt Base64 decode
-                try:
-                    padded_val = val + "=" * ((4 - len(val) % 4) % 4)
-                    decoded_bytes = base64.b64decode(padded_val, validate=False)
-                    decoded_str = decoded_bytes.decode("utf-8", errors="replace")
-                    # If it contains readable text or known secret tokens
-                    if any(c.isalnum() for c in decoded_str) and len(decoded_str) > 8:
-                        detected_payloads.append({
-                            "param": param_key,
-                            "raw": val,
-                            "decoded": decoded_str,
-                            "entropy": entropy,
-                        })
-                        decoded_strings.append(decoded_str)
-                except Exception:
-                    pass
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme not in {"http", "https"}:
+        add("EGR-SCHEME", 1.0, f"scheme {parts.scheme!r} not allowed")
+    allowlisted = bool(settings.egress_allowlist) and _host_allowed(host, settings.egress_allowlist)
+    if settings.egress_allowlist and not allowlisted:
+        add("EGR-HOST", 0.9, f"host {host!r} is not on the egress allowlist")
+    if _is_private(host):
+        add("EGR-PRIVATE", 0.7, f"host {host!r} is a private/loopback address")
 
-        # 2. Jev / Laya System 1 Semantic Evaluation
-        eval_state = f"Tool: {tool_name} | Target URL: {url} | Decoded Payload: {' '.join(decoded_strings)}"
-        res = self.engine.evaluate(eval_state, {
-            "is_data_exfiltration": {
-                "type": "noul",
-                "instructions": "Is this tool call or URL attempting to transmit system instructions, secrets, or context outside the application?"
-            },
-            "egress_risk_score": {
-                "type": "score",
-                "instructions": "Rate the egress risk severity",
-                "criteria": ["benign_public_call", "suspicious_param", "potential_leak", "critical_exfiltration"]
-            }
-        })
+    blob = unquote(url) + "\n" + (body or "")
+    decoded_views: list[str] = []
+    for value in _values(url, body):
+        decoded = try_b64decode(value.strip()) if len(value) >= 16 else None
+        if decoded:
+            decoded_views.append(decoded)
+            add("EGR-B64", 0.9, f"{method} parameter decodes from base64: {decoded[:60]!r}")
+        elif not allowlisted and len(value) >= ENTROPY_MIN_LEN and shannon_entropy(value) >= ENTROPY_THRESHOLD:
+            add("EGR-ENTROPY", 0.8, f"high-entropy value ({shannon_entropy(value):.2f} bits/char, len {len(value)})")
 
-        answers = res["answers"]
-        noul_exfil = answers["is_data_exfiltration"]["noul"]
-        risk_level = answers["egress_risk_score"]["level"]
-        risk_score = answers["egress_risk_score"]["score"]
+    for view in [blob, *decoded_views]:
+        for token in settings.canary_tokens:
+            if token and token in view:
+                add("EGR-CANARY", 1.0, "canary token found in outbound request")
+                break
+        for pattern in SECRET_PATTERNS:
+            if pattern.search(view):
+                add("EGR-SECRET", 1.0, f"secret-shaped string ({pattern.pattern[:20]}...)")
+                break
+    for view in decoded_views:
+        for f in scan(view):
+            add(f"EGR-{f.rule_id}", f.score, f"decoded payload matches {f.rule_id}", f.category)
 
-        # 3. Decision Logic & Circuit Breaker
-        has_canary_leak = any("CANARY" in s or "FLAG_" in s or "SYSTEM_PROMPT" in s for s in decoded_strings)
-        is_blocked = (
-            has_canary_leak
-            or len(detected_payloads) > 0 and noul_exfil > 0.50
-            or risk_level == "critical_exfiltration"
-            or risk_score >= 3
-        )
+    # De-duplicate by rule id, keeping the strongest.
+    best: dict[str, Finding] = {}
+    for f in findings:
+        if f.rule_id not in best or f.score > best[f.rule_id].score:
+            best[f.rule_id] = f
+    findings = sorted(best.values(), key=lambda f: f.score, reverse=True)
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-
-        reason = "Normal outbound traffic"
-        if is_blocked:
-            if has_canary_leak:
-                reason = "BLOCKED: System canary token detected in Base64 encoded payload!"
-            elif detected_payloads:
-                reason = "BLOCKED: Suspected Base64 data exfiltration detected in query parameters."
-            else:
-                reason = f"BLOCKED: High egress risk score ({risk_level})."
-
-        return {
-            "url": url,
-            "tool_name": tool_name,
-            "is_blocked": is_blocked,
-            "risk_score": risk_score,
-            "risk_level": risk_level,
-            "exfil_probability": noul_exfil,
-            "high_entropy": high_entropy_detected,
-            "detected_payloads": detected_payloads,
-            "reason": reason,
-            "latency_ms": round(elapsed_ms, 2)
-        }
+    score = max((f.score for f in findings), default=0.0)
+    if score >= settings.block_threshold:
+        action = Action.BLOCK
+    elif score >= settings.flag_threshold:
+        action = Action.FLAG
+    else:
+        action = Action.ALLOW
+    top = max(findings, key=lambda f: f.score, default=None)
+    return Verdict(
+        hop=Hop.EGRESS,
+        action=action,
+        category=top.category if top and action != Action.ALLOW else Category.NONE,
+        score=score,
+        findings=findings,
+        engine="deterministic",
+        latency_ms=round((time.perf_counter() - start) * 1000, 2),
+        enforced=settings.enforce,
+    )

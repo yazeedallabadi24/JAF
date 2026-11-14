@@ -1,28 +1,50 @@
-"""Unit tests for Phase 3: Outbound Tool & URL Egress Firewall."""
-
 import base64
-import unittest
-from core.phase3_egress_firewall import EgressFirewall
+
+from core.phase3_egress_firewall import inspect_request
+from core.verdict import Action
+
+from .conftest import CANARY
 
 
-class TestPhase3EgressFirewall(unittest.TestCase):
-    def setUp(self):
-        self.firewall = EgressFirewall()
-
-    def test_benign_outbound_url(self):
-        url = "https://api.github.com/repos/yazeedallabadi24/JAF"
-        res = self.firewall.inspect_egress(url)
-        self.assertFalse(res["is_blocked"])
-
-    def test_base64_exfiltration_blocked(self):
-        secret = "FLAG_BLDR_AMMAN_2026_SECRET_SYSTEM_CANARY_X99"
-        b64_payload = base64.b64encode(secret.encode("utf-8")).decode("utf-8")
-        malicious_url = f"http://127.0.0.1:8765/collect?p={b64_payload}"
-
-        res = self.firewall.inspect_egress(malicious_url)
-        self.assertTrue(res["is_blocked"])
-        self.assertIn("canary", res["reason"].lower())
+def _b64(s: str) -> str:
+    return base64.b64encode(s.encode()).decode()
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_allowlisted_clean_request_allowed(settings):
+    v = inspect_request("https://api.openbanking.example/v1/accounts?page=2", settings)
+    assert v.action == Action.ALLOW
+
+
+def test_canary_exfiltration_via_base64_blocked(settings):
+    url = f"http://127.0.0.1:8765/collect?p={_b64('system prompt: ' + CANARY)}"
+    v = inspect_request(url, settings)
+    assert v.action == Action.BLOCK
+    rule_ids = {f.rule_id for f in v.findings}
+    assert {"EGR-CANARY", "EGR-B64", "EGR-PRIVATE", "EGR-HOST"} <= rule_ids
+
+
+def test_raw_canary_in_body_blocked(settings):
+    v = inspect_request("https://api.openbanking.example/log", settings, "POST", f"note={CANARY}")
+    assert v.action == Action.BLOCK
+
+
+def test_secret_shaped_string_blocked(settings):
+    v = inspect_request("https://api.openbanking.example/x?k=sk-or-v1-" + "a" * 40, settings)
+    assert v.action == Action.BLOCK
+
+
+def test_high_entropy_blob_to_unknown_host_blocked(settings):
+    blob = "Zx9QpL2mN7vR4tK8wY1cH6bJ3sD5fG0aE"  # not valid readable base64
+    v = inspect_request(f"https://evil.example/c?d={blob}", settings)
+    assert v.action == Action.BLOCK
+
+
+def test_file_scheme_blocked(settings):
+    v = inspect_request("file:///etc/passwd", settings)
+    assert v.action == Action.BLOCK
+
+
+def test_no_allowlist_plain_public_request_allowed(settings):
+    settings.egress_allowlist = []
+    v = inspect_request("https://en.wikipedia.org/wiki/Open_banking", settings)
+    assert v.action == Action.ALLOW
