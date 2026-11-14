@@ -120,19 +120,34 @@ class LLMAgent:
         ]
         for _ in range(self.max_steps):
             resp = self.client.chat.completions.create(
-                model=self.model, messages=messages, tools=AgentTools.SCHEMAS, temperature=0
+                model=self.model,
+                messages=messages,
+                tools=AgentTools.SCHEMAS,
+                parallel_tool_calls=False,
+                temperature=0,
             )
             msg = resp.choices[0].message
             if not msg.tool_calls:
                 return msg.content or ""
-            messages.append(msg.model_dump(exclude_none=True))
-            for call in msg.tool_calls:
+
+            # Ensure clean single-tool-call format for Groq/CoreWeave Llama 3.1
+            t_calls = msg.tool_calls[:1]
+            clean_calls = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in t_calls
+            ]
+            messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": clean_calls})
+            for call in t_calls:
                 args = json.loads(call.function.arguments or "{}")
                 try:
                     output = getattr(self.tools, call.function.name)(**args)
                 except Blocked as exc:
                     output = f"ERROR: {exc}"
-                messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
+                messages.append({"role": "tool", "tool_call_id": call.id, "content": str(output)})
         return "Stopped: step limit reached."
 
 
